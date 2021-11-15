@@ -1,0 +1,14 @@
+epoch: 0
+n_epochs: 200
+batchSize: 1
+dataroot: ./dataset/RICE1
+lr: 0.002
+decay_epoch: 50
+size: 224
+input_nc: 3
+output_nc: 3
+n_cpu: 0
+cuda: True
+out_dir: ./results
+manualSeed: 42
+gpu_ids: [ 0 ]
