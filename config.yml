@@ -1,5 +1,5 @@
 # folder path of dataset, which includes 2 subfolders: cloudy_image/ and ground_truth/
-datasets_dir: ./dataset//RICE1/
+datasets_dir: ./dataset/RICE_DATASET/RICE1
 train_list: train_list.txt
 test_list: test_list.txt
 out_dir: results

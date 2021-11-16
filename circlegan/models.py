@@ -1,92 +1,104 @@
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+
+def weights_init_normal(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+    elif classname.find('BatchNorm2d') != -1:
+        torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
+        torch.nn.init.constant_(m.bias.data, 0.0)
+
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_features):
+    '''Residual Block with Instance Normalization'''
+
+    def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
 
-        conv_block = [  nn.ReflectionPad2d(1),
-                        nn.Conv2d(in_features, in_features, 3),
-                        nn.InstanceNorm2d(in_features),
-                        nn.ReLU(inplace=True),
-                        nn.ReflectionPad2d(1),
-                        nn.Conv2d(in_features, in_features, 3),
-                        nn.InstanceNorm2d(in_features)  ]
-
-        self.conv_block = nn.Sequential(*conv_block)
+        self.model = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.InstanceNorm2d(out_channels, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.InstanceNorm2d(out_channels, affine=True, track_running_stats=True),
+        )
 
     def forward(self, x):
-        return x + self.conv_block(x)
+        return self.model(x) + x
+
 
 class Generator(nn.Module):
-    def __init__(self, input_nc, output_nc, n_residual_blocks=9):
+    '''Generator with Down sampling, Several ResBlocks and Up sampling.
+       Down/Up Samplings are used for less computation.
+    '''
+
+    def __init__(self, conv_dim, layer_num):
         super(Generator, self).__init__()
 
-        # Initial convolution block       
-        model = [   nn.ReflectionPad2d(3),
-                    nn.Conv2d(input_nc, 64, 7),
-                    nn.InstanceNorm2d(64),
-                    nn.ReLU(inplace=True) ]
+        layers = []
 
-        # Downsampling
-        in_features = 64
-        out_features = in_features*2
-        for _ in range(2):
-            model += [  nn.Conv2d(in_features, out_features, 3, stride=2, padding=1),
-                        nn.InstanceNorm2d(out_features),
-                        nn.ReLU(inplace=True) ]
-            in_features = out_features
-            out_features = in_features*2
+        # input layer
+        layers.append(nn.Conv2d(in_channels=3, out_channels=conv_dim, kernel_size=7, stride=1, padding=3, bias=False))
+        layers.append(nn.InstanceNorm2d(conv_dim, affine=True, track_running_stats=True))
+        layers.append(nn.ReLU(inplace=True))
 
-        # Residual blocks
-        for _ in range(n_residual_blocks):
-            model += [ResidualBlock(in_features)]
+        # down sampling layers
+        current_dims = conv_dim
+        for i in range(2):
+            layers.append(nn.Conv2d(current_dims, current_dims*2, kernel_size=4, stride=2, padding=1, bias=False))
+            layers.append(nn.InstanceNorm2d(current_dims*2, affine=True, track_running_stats=True))
+            layers.append(nn.ReLU(inplace=True))
+            current_dims *= 2
 
-        # Upsampling
-        out_features = in_features//2
-        for _ in range(2):
-            model += [  nn.ConvTranspose2d(in_features, out_features, 3, stride=2, padding=1, output_padding=1),
-                        nn.InstanceNorm2d(out_features),
-                        nn.ReLU(inplace=True) ]
-            in_features = out_features
-            out_features = in_features//2
+        # Residual Layers
+        for i in range(layer_num):
+            layers.append(ResidualBlock(current_dims, current_dims))
 
-        # Output layer
-        model += [  nn.ReflectionPad2d(3),
-                    nn.Conv2d(64, output_nc, 7),
-                    nn.Tanh() ]
+        # up sampling layers
+        for i in range(2):
+            layers.append(nn.ConvTranspose2d(current_dims, current_dims//2, kernel_size=4, stride=2, padding=1, bias=False))
+            layers.append(nn.InstanceNorm2d(current_dims//2, affine=True, track_running_stats=True))
+            layers.append(nn.ReLU(inplace=True))
+            current_dims = current_dims//2
 
-        self.model = nn.Sequential(*model)
+        # output layer
+        layers.append(nn.Conv2d(current_dims, 3, kernel_size=7, stride=1, padding=3, bias=False))
+        layers.append(nn.Tanh())
 
-    def forward(self, x):
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x,):
         return self.model(x)
 
+
 class Discriminator(nn.Module):
-    def __init__(self, input_nc):
+    '''Discriminator with PatchGAN'''
+
+    def __init__(self, image_size, conv_dim, layer_num):
         super(Discriminator, self).__init__()
 
-        # A bunch of convolutions one after another
-        model = [   nn.Conv2d(input_nc, 64, 4, stride=2, padding=1),
-                    nn.LeakyReLU(0.2, inplace=True) ]
+        layers = []
 
-        model += [  nn.Conv2d(64, 128, 4, stride=2, padding=1),
-                    nn.InstanceNorm2d(128), 
-                    nn.LeakyReLU(0.2, inplace=True) ]
+        # input layer
+        layers.append(nn.Conv2d(3, conv_dim, kernel_size=4, stride=2, padding=1))
+        layers.append(nn.LeakyReLU(0.2, inplace=True))
+        current_dim = conv_dim
 
-        model += [  nn.Conv2d(128, 256, 4, stride=2, padding=1),
-                    nn.InstanceNorm2d(256), 
-                    nn.LeakyReLU(0.2, inplace=True) ]
+        # hidden layers
+        for i in range(layer_num):
+            layers.append(nn.Conv2d(current_dim, current_dim*2, kernel_size=4, stride=2, padding=1))
+            layers.append(nn.InstanceNorm2d(current_dim*2))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            current_dim *= 2
 
-        model += [  nn.Conv2d(256, 512, 4, padding=1),
-                    nn.InstanceNorm2d(512), 
-                    nn.LeakyReLU(0.2, inplace=True) ]
+        self.model = nn.Sequential(*layers)
 
-        # FCN classification layer
-        model += [nn.Conv2d(512, 1, 4, padding=1)]
-
-        self.model = nn.Sequential(*model)
+        # output layer
+        self.conv_src = nn.Conv2d(current_dim, 1, kernel_size=3, stride=1, padding=1, bias=False)
 
     def forward(self, x):
-        x =  self.model(x)
-        # Average pooling and flatten
-        return F.avg_pool2d(x, x.size()[2:]).view(x.size()[0], -1)
+        x = self.model(x)
+        out_src = self.conv_src(x)
+        return out_src
